@@ -14,6 +14,7 @@ import re
 import uuid
 import requests
 import json
+import base64
 
 from aigpy import fileHelper
 from aigpy import pathHelper
@@ -25,8 +26,10 @@ from aigpy import configHelper
 from aigpy.ffmpegHelper import FFmpegTool
 # from tidal_dl import tagHelper
 from pydub import AudioSegment
+from tidal_dl.printhelper import printWarning
 
 VERSION = '1.9.1'
+# VERSION = '2.25.1'
 URL_PRE = 'https://api.tidalhifi.com/v1/'
 QUALITY = ['HI_RES', 'LOSSLESS', 'HIGH', 'LOW']
 TYPE_ARR = ['album', 'track', 'video', 'playlist', 'artist']
@@ -40,11 +43,23 @@ class TidalTool(object):
         self.tmpfileFlag = 'TIDAL_TMP_'
         self.ffmpeg = FFmpegTool(1)
 
+        self.header = {'X-Tidal-SessionId': self.config.sessionid}
+        self.header2 = {'X-Tidal-SessionId': self.config.sessionid2}
+
+        self.header3 = None
+        if self.config.accesstoken != '':
+            self.header3 = {'authorization': 'Bearer {}'.format(self.config.accesstoken)}
+
     def _get(self, url, params={}):
         retry = 3
-        sessionid = self.config.sessionid
-        if 'soundQuality' in params and params['soundQuality'] == 'LOSSLESS':
-            sessionid = self.config.sessionid2
+
+        if self.header3 is not None:
+            selectheader = self.header3
+        else:
+            selectheader = self.header
+            if 'soundQuality' in params: 
+                if params['soundQuality'] == 'LOSSLESS':
+                    selectheader = self.header2
 
         while retry > 0:
             retry -= 1
@@ -53,17 +68,22 @@ class TidalTool(object):
                 params['countryCode'] = self.config.countrycode
                 resp = requests.get(
                     URL_PRE + url,
-                    headers={'X-Tidal-SessionId': sessionid},
+                    headers=selectheader,
                     params=params).json()
                 if 'status' in resp and resp['status'] == 404 and resp['subStatus'] == 2001:
                     self.errmsg = '{}. This might be region-locked.'.format(resp['userMessage'])
+                elif 'status' in resp and resp['status'] == 401 and resp['subStatus'] == 4005: #'Asset is not ready for playback'
+                    if selectheader != self.header2:
+                        selectheader = self.header2
+                        continue
+                    self.errmsg = '{}.'.format(resp['userMessage'])
                 elif 'status' in resp and not resp['status'] == 200:
                     self.errmsg = '{}. Get operation err!'.format(resp['userMessage'])
                     # self.errmsg = "Get operation err!"
                 return resp
-            except:
+            except Exception as e:
                 if retry <= 0:
-                    self.errmsg = 'Function `Http-Get` Err!'
+                    self.errmsg = 'Function `Http-Get` Err! ' + str(e)
                     return None
 
     def setTag(self, tag, srcfile, coverpath=None):
@@ -106,6 +126,15 @@ class TidalTool(object):
         self.setTag(tag, file_path, coverpath)
         return
 
+    def isNeedCovertToM4a(self, file_path):
+        if self.config.onlym4a != "True":
+            return False
+        if '.mp4' not in file_path:
+            return False
+        if not self.ffmpeg.enable:
+            return False
+        return True
+
     def covertMp4toM4a(self, file_path):
         if self.config.onlym4a != "True":
             return file_path
@@ -143,6 +172,7 @@ class TidalTool(object):
         obj.copyright = track_info['copyright']
         obj.tracknumber = track_info['trackNumber']
         obj.discnumber = track_info['volumeNumber']
+        obj.isrc = track_info['isrc']
         obj.composer = self._parseContributors('Composer', Contributors)
         if index is not None:
             obj.tracknumber = str(index)
@@ -161,8 +191,37 @@ class TidalTool(object):
                 if self.tmpfileFlag in name:
                     pathHelper.remove(os.path.join(root, name))
 
+    def getStreamUrl2(self, track_id, quality):
+        url = self._get('tracks/' + str(track_id) + '/streamUrl', {'soundQuality': quality})
+        if not url:
+            resp = self._get('tracks/{}/playbackinfopostpaywall'.format(track_id), {
+                 'audioquality': quality,
+                 'playbackmode': 'STREAM',
+                 'assetpresentation': 'FULL'})
+            if resp and 'trackId' in resp:
+                #  printWarning(14, "Redirecting: {} -> {}".format(track_id, resp['trackId']))
+                track_id = resp['trackId']
+                url = self._get('tracks/' + str(track_id) + '/streamUrl', {'soundQuality': quality})
+        return url
+
     def getStreamUrl(self, track_id, quality):
-        return self._get('tracks/' + str(track_id) + '/streamUrl', {'soundQuality': quality})
+        resp = self._get('tracks/{}/playbackinfopostpaywall'.format(track_id), {
+            'audioquality': quality,
+            'playbackmode': 'STREAM',
+            'assetpresentation': 'FULL'})
+        if resp and 'trackId' in resp:
+            manifest = json.loads(base64.b64decode(resp['manifest']))
+            url = {
+                'soundQuality': resp['audioQuality'],
+                'codec': manifest['codecs'],
+                'url': manifest['urls'][0],
+                'encryptionKey': manifest['keyId'] if 'encryptionType' in manifest and manifest['encryptionType'] != 'NONE' else ''
+            }
+            #  printWarning(14, "Redirecting: {} -> {}".format(track_id, resp['trackId']))
+            # track_id = resp['trackId']
+            # url = self._get('tracks/' + str(track_id) + '/streamUrl', {'soundQuality': quality})
+            return url
+        return self.getStreamUrl2(track_id, quality)
 
     def _getArtists(self, pHash):
         ret = []
@@ -219,7 +278,7 @@ class TidalTool(object):
             return info
         # sum = info['totalNumberOfItems']
         for item in info['items']:
-            if item['version'] is not None:
+            if 'version' in item and item['version'] is not None:
                 item['title'] += ' - ' + item['version']
         #     indexs = self._getIndexStr(item['trackNumber'],sum)
         #     item['title'] = indexs + " " + item['title']
@@ -239,18 +298,23 @@ class TidalTool(object):
 
     def getTrack(self, track_id):
         item = self._get('tracks/' + str(track_id))
-        if item['version'] is not None:
+        if item is None:
+            return None
+        if 'version' in item and item['version'] is not None:
             item['title'] += ' - ' + item['version']
         return item
 
     def getAlbum(self, album_id):
-        return self._get('albums/' + str(album_id))
+        item = self._get('albums/' + str(album_id))
+        item['title'] = item['title'].strip()
+        return item
 
     def getVideo(self, video_id):
         return self._get('videos/' + str(video_id))
 
     def getFavorite(self, user_id):
         trackList = self.__getItemsList('users/' + str(user_id) + '/favorites/tracks')
+        tracklist = self._fixSameTrackName(trackList, True)
         videoList = self.__getItemsList('users/' + str(user_id) + '/favorites/videos')
         return trackList, videoList
 
@@ -293,7 +357,7 @@ class TidalTool(object):
 
     def getAlbumArtworkUrl(self, coverid, size=1280):
         if coverid is not None: 
-            return 'https://resources.tidal.com/images/{0}/{1}x{1}.jpg'.format(coverid.replace('-', '/'), size) 
+            return 'http://resources.tidal.com/images/{0}/{1}x{1}.jpg'.format(coverid.replace('-', '/'), size) 
         else: 
             return '' 
 
@@ -425,17 +489,43 @@ class TidalTool(object):
 
 # LogIn and Get SessionID
 
+class TidalToken(object):
+    def __init__(self):
+        self.clientID = 'ck3zaWMi8Ka_XdI0'
+        self.token1 = "MbjR4DLXz1ghC4rV"    
+        # self.token2 = "hZ9wuySZCmpLLiui"    # only lossless
+        self.token2 = "pl4Vc0hemlAXD0mN"    # only lossless
+        try:
+            # msg = requests.get( "https://raw.githubusercontent.com/yaronzz/Tidal-Media-Downloader/master/Else/tokens.json", timeout=(20.05, 27.05))
+            msg = requests.get( "https://cdn.jsdelivr.net/gh/yaronzz/Tidal-Media-Downloader@latest/Else/tokens.json", timeout=(20.05, 27.05))
+            tokens = json.loads(msg.text)
+            self.token1 = tokens['token']
+            self.token2 = tokens['token_phone']
+            if 'clientid' in tokens:
+                self.clientid = tokens['clientid']
+        except Exception as e:
+            pass
 
 class TidalAccount(object):
-    def __init__(self, username, password, bymobile=False):
-        token = '4zx46pyr9o8qZNRw'
+    def __init__(self, username, password, tokens, bymobile=False, cf=None):
+        token = tokens.token1
         if bymobile == True:
-            token = 'kgsOOmYk3zShYrNP'
+            token = tokens.token2
+        self.errmsg = ""
+
+        if cf is not None and cf.username == username:
+            self.user_id = cf.userid
+            self.session_id = cf.sessionid
+            if bymobile:
+                self.session_id = cf.sessionid2
+            if self.validSessionID():
+                self.country_code = cf.countrycode
+                self.password = password
+                return
 
         self.username = username
         self.token = token
         self.uuid = str(uuid.uuid4()).replace('-', '')[16:]
-        self.errmsg = ""
         self.getSessionID(password)
 
     def getSessionID(self, password):
@@ -448,25 +538,30 @@ class TidalAccount(object):
         }
         re = requests.post(URL_PRE + 'login/username', data=postParams).json()
         if 'status' in re:
+            label = ''
+            if 'userMessage' in re and re['userMessage'] is not None:
+                label = re['userMessage']
             if re['status'] == 401:
-                self.errmsg = "Username or password err!"
+                self.errmsg = "Username or password err!" + label
             else:
-                self.errmsg = "Get sessionid err!"
+                self.errmsg = "Get sessionid err!" + label
         else:
             self.session_id = re['sessionId']
             self.user_id = re['userId']
             self.country_code = re['countryCode']
-
-            re = requests.get(URL_PRE + 'users/' + str(self.user_id), params={'sessionId': self.session_id}).json()
-            if 'status' in re and not re['status'] == 200:
+            if self.validSessionID() is False:
                 self.errmsg = "Sessionid is unvalid!"
+    
+    def validSessionID(self):
+        ret = requests.get(URL_PRE + 'users/' + str(self.user_id), params={'sessionId': self.session_id}).json()
+        if 'status' in ret and not ret['status'] == 200:
+                return False
+        return True
 
 # Config Tool
-
-
 class TidalConfig(object):
     FILE_NAME = "tidal-dl.ini"
-
+    AES_KEY = "hhxx2020TTXS"
     def __init__(self):
         self.outputdir = configHelper.GetValue("base", "outputdir", "./", self.FILE_NAME)
         self.sessionid = configHelper.GetValue("base", "sessionid", "", self.FILE_NAME)
@@ -474,17 +569,31 @@ class TidalConfig(object):
         self.quality = configHelper.GetValue("base", "quality", "LOSSLESS", self.FILE_NAME)
         self.resolution = configHelper.GetValue("base", "resolution", "720", self.FILE_NAME)
         self.username = configHelper.GetValue("base", "username", "", self.FILE_NAME)
-        self.password = configHelper.GetValue("base", "password", "", self.FILE_NAME)
+        self.password = configHelper.GetValue("base", "password", "", self.FILE_NAME, aesKey=self.AES_KEY)
         self.userid = configHelper.GetValue("base", "userid", "", self.FILE_NAME)
         self.threadnum = configHelper.GetValue("base", "threadnum", "1", self.FILE_NAME)
         self.sessionid2 = configHelper.GetValue("base", "sessionid2", "", self.FILE_NAME)
         self.onlym4a = configHelper.GetValue("base", "onlym4a", "False", self.FILE_NAME)
-        self.showprogress = configHelper.GetValue("base", "showprogress", "False", self.FILE_NAME)
+        self.showprogress = configHelper.GetValue("base", "showprogress", "True", self.FILE_NAME)
         self.addhyphen = configHelper.GetValue("base", "addhyphen", "False", self.FILE_NAME)
-        self.addyear = configHelper.GetValue("base", "addyear", "False", self.FILE_NAME)
+        self.addyear = configHelper.GetValue("base", "addyear", "No", self.FILE_NAME)
         self.plfile2arfolder = configHelper.GetValue("base", "plfile2arfolder", "False", self.FILE_NAME)
         self.addexplicit = configHelper.GetValue("base", "addexplicit", "False", self.FILE_NAME)
         self.includesingle = configHelper.GetValue("base", "includesingle", "True", self.FILE_NAME)
+        self.savephoto = configHelper.GetValue("base", "savephoto", "True", self.FILE_NAME)
+        self.lastlogintime = configHelper.GetValue("base", "lastlogintime", "", self.FILE_NAME)
+        self.accesstoken = configHelper.GetValue("base", "accesstoken", "", self.FILE_NAME)
+
+    def set_lastlogintime(self, status):
+        self.lastlogintime = status
+        configHelper.SetValue("base", "lastlogintime", status, self.FILE_NAME)
+
+    def set_savephoto(self, status):
+        if status == 0:
+            self.savephoto = "False"
+        else:
+            self.savephoto = "True"
+        configHelper.SetValue("base", "savephoto", self.savephoto, self.FILE_NAME)
 
     def set_includesingle(self, status):
         if status == 0:
@@ -522,11 +631,8 @@ class TidalConfig(object):
         configHelper.SetValue("base", "addhyphen", self.addhyphen, self.FILE_NAME)
 
     def set_addyear(self, status):
-        if status == 0:
-            self.addyear = "False"
-        else:
-            self.addyear = "True"
-        configHelper.SetValue("base", "addyear", self.addyear, self.FILE_NAME)
+        self.addyear = status
+        configHelper.SetValue("base", "addyear", status, self.FILE_NAME)
 
     def set_addexplicit(self, status):
         if status == 0:
@@ -557,10 +663,23 @@ class TidalConfig(object):
         self.sessionid = sessionid
         self.sessionid2 = sessionid2
         self.countrycode = countrycode
+        self.userid = userid
         configHelper.SetValue("base", "username", username, self.FILE_NAME)
-        configHelper.SetValue("base", "password", password, self.FILE_NAME)
+        configHelper.SetValue("base", "password", password, self.FILE_NAME, aesKey=self.AES_KEY)
         configHelper.SetValue("base", "sessionid", sessionid, self.FILE_NAME)
         configHelper.SetValue("base", "sessionid2", sessionid2, self.FILE_NAME)
+        configHelper.SetValue("base", "countrycode", countrycode, self.FILE_NAME)
+        configHelper.SetValue("base", "userid", str(userid), self.FILE_NAME)
+
+    def set_account2(self, username, password, accesstoken, countrycode, userid):
+        self.username = username
+        self.password = password
+        self.accesstoken = accesstoken
+        self.countrycode = countrycode
+        self.userid = userid
+        configHelper.SetValue("base", "username", username, self.FILE_NAME)
+        configHelper.SetValue("base", "password", password, self.FILE_NAME, aesKey=self.AES_KEY)
+        configHelper.SetValue("base", "accesstoken", accesstoken, self.FILE_NAME)
         configHelper.SetValue("base", "countrycode", countrycode, self.FILE_NAME)
         configHelper.SetValue("base", "userid", str(userid), self.FILE_NAME)
 

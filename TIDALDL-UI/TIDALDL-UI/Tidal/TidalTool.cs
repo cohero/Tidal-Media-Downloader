@@ -15,6 +15,8 @@ using Newtonsoft.Json;
 using System.Net.Http;
 using System.Net;
 using System.Collections.Specialized;
+using Microsoft.VisualBasic;
+using Microsoft.VisualBasic.ApplicationServices;
 
 namespace Tidal
 {
@@ -26,13 +28,13 @@ namespace Tidal
         const int ARTIST_COVER_SIZE = 480;
         const int PLAYLIST_COVER_SIZE = 480;
         const int VIDEO_COVER_SIZE = 1280;
-
         #endregion
 
         #region STATIC
         static string URL             = "https://api.tidalhifi.com/v1/";
-        static string TOKEN           = "4zx46pyr9o8qZNRw";
-        static string TOKEN_PHONE     = "kgsOOmYk3zShYrNP";
+        static string TOKEN           = "u5qPNNYIbD0S0o36MrAiFZ56K6qMCrCmYPzZuTnV";
+        static string TOKEN_PHONE     = "hZ9wuySZCmpLLiui";
+        //static string TOKEN_PHONE     = "kgsOOmYk3zShYrNP";
         static string VERSION         = "1.9.1";
         static byte[] MASTER_KEY      = System.Convert.FromBase64String("UIlTTEMmmLfGowo/UC60x2H45W6MdGgTRfo/umg4754=");
         static string USERNAME        = null;
@@ -44,69 +46,165 @@ namespace Tidal
         static string[] LINKPRES      = { "https://tidal.com/browse/", "https://listen.tidal.com/"};
         public static HttpHelper.ProxyInfo PROXY = null;
         static int    SEARCH_NUM      = 30;
+        public static string USER_INFO_KEY = "hOjn45fP";
         #endregion
 
         #region Login
 
+        static bool tokenUpdateFlag = false;
+        public static string loginErrlabel = "";
+
+        /// <summary>
+        /// Get token from github
+        /// </summary>
+        private static void updateToken()
+        {
+            if (tokenUpdateFlag)
+                return;
+
+            string sUrl = "https://raw.githubusercontent.com/yaronzz/Tidal-Media-Downloader/master/Else/tokens.json";
+            RETRY_AGAIN:
+            try
+            {
+                //string sReturn = NetHelper.DownloadString(sUrl, 10000);
+                string sErrmsg;
+                string sReturn = (string)HttpHelper.GetOrPost(sUrl, out sErrmsg, IsErrResponse: true, Timeout: 10* 1000, Proxy: PROXY);
+                if (sReturn.IsNotBlank())
+                {
+                    TOKEN = JsonHelper.GetValue(sReturn, "token");
+                    TOKEN_PHONE = JsonHelper.GetValue(sReturn, "token_phone");
+                    tokenUpdateFlag = true;
+                }
+            }
+            catch { }
+
+            string sUrl2 = "https://cdn.jsdelivr.net/gh/yaronzz/Tidal-Media-Downloader@latest/Else/tokens.json";
+            if (sUrl != sUrl2)
+            {
+                sUrl = sUrl2;
+                goto RETRY_AGAIN;
+            }
+        }
+        
+        /// <summary>
+        /// log out
+        /// </summary>
         public static void logout()
         {
             ISLOGIN = false;
         }
 
-        public static string loginErrlabel = "";
+        /// <summary>
+        /// valid SessionID
+        /// </summary>
+        /// <param name="sUserID"></param>
+        /// <param name="sSessionID"></param>
+        /// <returns></returns>
+        public static bool CheckSessionID(string sUserID, string sSessionID)
+        {
+            if (sUserID.IsBlank() || sSessionID.IsBlank())
+                return false;
+
+            string Errmsg;
+            string sRet = (string)HttpHelper.GetOrPost(URL + "users/" + sUserID, out Errmsg, 
+                        new Dictionary<string, string>() { {"sessionId", sSessionID }},
+                        ContentType: "application/x-www-form-urlencoded",
+                        IsErrResponse: true, Timeout: 30 * 1000, Proxy: PROXY);
+            if (Errmsg.IsNotBlank())
+                return false;
+            string check = AIGS.Helper.JsonHelper.GetValue(Errmsg, "status");
+            if (check.IsNotBlank())
+                return false;
+            return true;
+        }
+
+        static string getHttpSession(string UserName, string Password, string sToken, out string sErrmsg)
+        {
+            string sRet = (string)HttpHelper.GetOrPost(URL + "login/username", out sErrmsg, new Dictionary<string, string>() {
+                {"username", UserName },
+                {"password", Password },
+                {"token", sToken},
+                {"clientVersion", VERSION},
+                {"clientUniqueKey", getUID()}},
+                ContentType: "application/x-www-form-urlencoded",
+                IsErrResponse: true, Timeout: 30 * 1000, Proxy: PROXY);
+
+            if (sErrmsg.IsNotBlank())
+            {
+                sErrmsg = AIGS.Helper.JsonHelper.GetValue(sErrmsg, "userMessage");
+                return null;
+            }
+            return sRet;
+        }
+
+        /// <summary>
+        /// login
+        /// </summary>
+        /// <param name="UserName"></param>
+        /// <param name="Password"></param>
+        /// <returns></returns>
         public static bool login(string UserName, string Password)
         {
             if (ISLOGIN)
                 return true;
 
-            string Errmsg  = null;
-            string SessID1 = null;
-            string SessID2 = null;
-            string Ccode   = null;
-            string sRet    = null;
-            for (int i = 0; i < 2; i++)
+            //Use last session
+            string sLastUserid = Config.Userid();
+            string sLastCountryCode = Config.Countrycode();
+            string sLastSession = null; 
+            string sLastSessionPhone = null; 
+            if (Config.Username() == UserName && Config.Password() == Password && sLastCountryCode.IsNotBlank())
             {
-                //HttpHelper.GetOrPost get err when the username=="xxxxx+xxx@gmail.com"
-                if (UserName.IndexOf("@gmail") >= 0 && UserName.IndexOf("+") >= 0)
-                {
-                    sRet = NetHelper.UploadCollection(URL + "login/username", out Errmsg, new NameValueCollection {
-                    {"username", UserName },
-                    {"password", Password},
-                    {"token", i == 0 ? TOKEN_PHONE : TOKEN},
-                    {"clientVersion", VERSION},
-                    {"clientUniqueKey", getUID()}}, 20 * 1000, IsErrResponse: true).ToString();
-                }
-                else
-                {
-                    sRet = (string)HttpHelper.GetOrPost(URL + "login/username", out Errmsg, new Dictionary<string, string>() {
-                    {"username", UserName },
-                    {"password", Password},
-                    {"token", i == 0 ? TOKEN_PHONE : TOKEN},
-                    {"clientVersion", VERSION},
-                    {"clientUniqueKey", getUID()}},
-                        ContentType: "application/x-www-form-urlencoded",
-                        IsErrResponse: true, Timeout: 30 * 1000, Proxy: PROXY);
-                }
+                sLastSession = Config.Sessionid();
+                sLastSessionPhone = Config.SessionidPhone();
+                if (!CheckSessionID(sLastUserid, sLastSession))
+                    sLastSession = null;
+                if (!CheckSessionID(sLastUserid, sLastSessionPhone))
+                    sLastSessionPhone = null;
+            }
 
-                if (ISLOGIN)
-                    return true;
-                if (Errmsg.IsNotBlank())
+            //Login
+            string Errmsg1  = null;
+            string Errmsg2 = null;
+            string Str1 = null;
+            string Str2 = null;
+            string SessID1 = sLastSession;
+            string SessID2 = sLastSessionPhone;
+            string Ccode = null;
+            string UserID = null;
+            if (sLastSession.IsBlank())
+            {
+                updateToken();
+                Str1 = getHttpSession(UserName, Password, TOKEN, out Errmsg1);
+                if (Str1.IsNotBlank())
                 {
-                    loginErrlabel = AIGS.Helper.JsonHelper.GetValue(Errmsg, "userMessage");
-                    if (loginErrlabel == null)
-                        loginErrlabel = Errmsg;
-                    return false;
-                }
-                if (i == 0)
-                    SessID1 = JsonHelper.GetValue(sRet, "sessionId");
-                else
-                {
-                    SessID2 = JsonHelper.GetValue(sRet, "sessionId");
-                    Ccode = JsonHelper.GetValue(sRet, "countryCode");
+                    SessID1 = JsonHelper.GetValue(Str1, "sessionId");
+                    Ccode   = JsonHelper.GetValue(Str1, "countryCode");
+                    UserID  = JsonHelper.GetValue(Str1, "userId");
                 }
             }
-            if (ISLOGIN)
-                return true;
+            if (sLastSessionPhone.IsBlank())
+            {
+                updateToken();
+                Str2 = getHttpSession(UserName, Password, TOKEN_PHONE, out Errmsg2);
+                if (Str2.IsNotBlank())
+                {
+                    SessID2 = JsonHelper.GetValue(Str2, "sessionId");
+                    Ccode = JsonHelper.GetValue(Str2, "countryCode");
+                    UserID = JsonHelper.GetValue(Str2, "userId");
+                }
+            }
+
+            //Check
+            if(SessID1.IsBlank() && SessID2.IsBlank())
+            {
+                loginErrlabel = Errmsg1.IsBlank() ? Errmsg2 + "token2:" + TOKEN_PHONE : Errmsg1 + "token1:" + TOKEN;
+                return false;
+            }
+            if (UserID.IsBlank())
+                UserID = sLastUserid;
+            if (Ccode.IsBlank())
+                Ccode = sLastCountryCode;
 
             SESSIONID_PHONE = SessID1;
             SESSIONID       = SessID2;
@@ -114,8 +212,17 @@ namespace Tidal
             USERNAME        = UserName;
             PASSWORD        = Password;
             ISLOGIN         = true;
+
+            Config.Countrycode(COUNTRY_CODE);
+            Config.Username(USERNAME);
+            Config.Password(PASSWORD);
+            Config.Sessionid(SESSIONID);
+            Config.SessionidPhone(SESSIONID_PHONE);
+            Config.Userid(UserID);
             return true;
+
         }
+
 
         static string getUID()
         {
@@ -126,6 +233,7 @@ namespace Tidal
             sRet = sRet.Substring(0, 16);
             return sRet;
         }
+
         #endregion
 
         #region get
@@ -140,6 +248,11 @@ namespace Tidal
             if (Paras != null && Paras.ContainsKey("soundQuality") && Paras["soundQuality"].ToLower() == "lossless")
                 sSessionID = SESSIONID_PHONE;
 
+            //Check Session
+            if (sSessionID.IsBlank())
+                sSessionID = SESSIONID.IsBlank() ? SESSIONID_PHONE : SESSIONID;
+
+        POINT_RETURN:
             string sRet = (string)HttpHelper.GetOrPost(URL + Path + sParams, out Errmsg, Header: "X-Tidal-SessionId:" + sSessionID, Retry: RetryNum, IsErrResponse: true, Proxy: PROXY);
             if (!string.IsNullOrEmpty(Errmsg))
             {
@@ -148,6 +261,15 @@ namespace Tidal
                 string sMessage = JsonHelper.GetValue(Errmsg, "userMessage");
                 if (sStatus.IsNotBlank() && sStatus == "404" && sSubStatus == "2001")
                     Errmsg = sMessage + ". This might be region-locked.";
+                else if (sStatus.IsNotBlank() && sStatus == "401" && sSubStatus == "4005")//'Asset is not ready for playback'
+                {
+                    if (sSessionID != SESSIONID_PHONE)
+                    {
+                        sSessionID = SESSIONID_PHONE;
+                        goto POINT_RETURN;
+                    }
+                    Errmsg = sMessage;
+                }
                 else if (sStatus.IsNotBlank() && sStatus != "200")
                     Errmsg = sMessage + ". Get operation err!";
                 return null;
@@ -172,7 +294,7 @@ namespace Tidal
             return sRet;
         }
 
-        static ObservableCollection<T> getItems<T>(string Path, out string Errmsg, Dictionary<string, string> Paras = null, int RetryNum = 3)
+        static ObservableCollection<T> getItems<T>(string Path, out string Errmsg, Dictionary<string, string> Paras = null, int RetryNum = 3, int CountLimt = -1)
         {
             if (Paras == null)
                 Paras = new Dictionary<string, string>();
@@ -191,6 +313,8 @@ namespace Tidal
                 foreach (var item in pList)
                     pRet.Add(item);
                 if (pList.Count() < 50)
+                    break;
+                if (CountLimt > 0 && pRet.Count() >= CountLimt)
                     break;
                 iOffset += pList.Count();
                 Paras["offset"] = iOffset.ToString();
@@ -232,6 +356,12 @@ namespace Tidal
                     }
                 }
             }
+
+            for (int i = 0; i < oObj.Tracks.Count; i++)
+            {
+                if (oObj.Tracks[i].Version.IsNotBlank())
+                    oObj.Tracks[i].Title = oObj.Tracks[i].Title + " - " + oObj.Tracks[i].Version;
+            }
         }
 
         #endregion
@@ -240,6 +370,10 @@ namespace Tidal
         public static Track getTrack(string ID, out string Errmsg)
         {
             Track oObj = get<Track>("tracks/" + ID, out Errmsg);
+            if (oObj == null)
+                return null;
+            if (oObj.Version.IsNotBlank())
+                oObj.Title = oObj.Title + " - " + oObj.Version;
             return oObj;
         }
 
@@ -247,6 +381,18 @@ namespace Tidal
         {
             string sQua = AIGS.Common.Convert.ConverEnumToString((int)eQuality, typeof(eSoundQuality), 0);
             StreamUrl oObj = get<StreamUrl>("tracks/" + ID + "/streamUrl", out Errmsg, new Dictionary<string, string>() { { "soundQuality", sQua } }, 3);
+            if(oObj == null)
+            {
+                string Errmsg2 = null;
+                object resp = get<object>("tracks/" + ID + "/playbackinfopostpaywall", out Errmsg2,  new Dictionary<string, string>() { { "audioquality", sQua }, { "playbackmode", "STREAM" }, { "assetpresentation", "FULL" } }, 3);
+                if (resp != null)
+                {
+                    string sNewID = JsonHelper.GetValue(resp.ToString(), "trackId");
+                    if(sNewID.IsBlank())
+                        return oObj;
+                    oObj = get<StreamUrl>("tracks/" + sNewID + "/streamUrl", out Errmsg, new Dictionary<string, string>() { { "soundQuality", sQua } }, 3);
+                }
+            }
             return oObj;
         }
 
@@ -337,7 +483,7 @@ namespace Tidal
 
         #region Artist
 
-        public static Artist getArtist(string ID, out string Errmsg, bool GetItem = false)
+        public static Artist getArtist(string ID, out string Errmsg, bool GetItem = false, bool IncludeEp = true)
         {
             Artist oObj = get<Artist>("artists/" + ID, out Errmsg);
             if (oObj == null)
@@ -348,11 +494,14 @@ namespace Tidal
 
             if (GetItem)
             {
-                ObservableCollection<Album> albums = getItems<Album>("artists/" + ID + "/albums", out Errmsg, null);
-                ObservableCollection<Album> eps = getItems<Album>("artists/" + ID + "/albums", out Errmsg, new Dictionary<string, string>() { { "filter", "EPSANDSINGLES" } });
-                for (int i = 0; i < eps.Count; i++)
+                ObservableCollection<Album> albums = getItems<Album>("artists/" + ID + "/albums", out Errmsg, null, CountLimt:100);
+                if (IncludeEp)
                 {
-                    albums.Add(eps[i]);
+                    ObservableCollection<Album> eps = getItems<Album>("artists/" + ID + "/albums", out Errmsg, new Dictionary<string, string>() { { "filter", "EPSANDSINGLES" } }, CountLimt: 100);
+                    for (int i = 0; i < eps.Count; i++)
+                    {
+                        albums.Add(eps[i]);
+                    }
                 }
                 oObj.Albums = albums;
 
@@ -551,8 +700,8 @@ namespace Tidal
             if (Path.GetExtension(sFilePath).ToLower().IndexOf("mp4") < 0)
                 return true;
 
-            sNewFilePath = sFilePath.Replace(".mp4", ".m4a");
-            if(FFmpegHelper.Convert(sFilePath, sNewFilePath))
+            sNewFilePath = sFilePath.Replace(".mp4", ".m4a");            
+            if (FFmpegHelper.Convert(sFilePath, sNewFilePath))
             {
                 System.IO.File.Delete(sFilePath);
                 return true;
@@ -662,15 +811,13 @@ namespace Tidal
                     tfile.Tag.Year = (uint)AIGS.Common.Convert.ConverStringToInt(TidalAlbum.ReleaseDate.Split("-")[0]);
 
                 //Cover
-                if (CoverPath.IsNotBlank())
-                {
-                    var pictures = new Picture[1];
-                    if(!System.IO.File.Exists(CoverPath))
-                        pictures[0] = new Picture(TidalAlbum.CoverData);
-                    else
-                        pictures[0]  = new Picture(CoverPath);
-                    tfile.Tag.Pictures = pictures;
-                }
+                var pictures = new Picture[1];
+                if (CoverPath.IsNotBlank() && System.IO.File.Exists(CoverPath))
+                    pictures[0] = new Picture(CoverPath);
+                else if(TidalAlbum.CoverData != null)
+                    pictures[0] = new Picture(TidalAlbum.CoverData);
+                        
+                tfile.Tag.Pictures = pictures;
 
                 tfile.Save();
                 return null;
@@ -711,69 +858,103 @@ namespace Tidal
             return Path.GetFullPath(sRet);
         }
 
-        public static string getAlbumFolder(string basePath, Album album)
+        public static string getAlbumFolder(string basePath, Album album, int addYear = 0)
         {
-            string sRet = string.Format("{0}/Album/{1}/{2}/", basePath, formatPath(album.Artist.Name), formatPath(album.Title));
+            string sQualityFlag = "";
+            string sss = Config.Quality();
+            if (Config.Quality().ToUpper().IndexOf("RES") >= 0 && album.AudioQuality == "HI_RES")
+                sQualityFlag = "[M] ";
+
+            string sRet;
+            if(addYear < 1 || addYear > 2 || album.ReleaseDate.IsBlank())
+                sRet = string.Format("{0}/Album/{1}/{3}{2}/", basePath, formatPath(album.Artist.Name), formatPath(album.Title), sQualityFlag);
+            else
+            {
+                string sYearStr = '[' + album.ReleaseDate.Substring(0,4) + ']';
+                if(addYear == 1)
+                    sRet = string.Format("{0}/Album/{1}/{4}{3} {2}/", basePath, formatPath(album.Artist.Name), formatPath(album.Title), sYearStr, sQualityFlag);
+                else
+                    sRet = string.Format("{0}/Album/{1}/{4}{2} {3}/", basePath, formatPath(album.Artist.Name), formatPath(album.Title), sYearStr, sQualityFlag);
+            }
+            sRet = cutFilePath(sRet);
             return Path.GetFullPath(sRet);
         }
 
-        public static string getAlbumCoverPath(string basePath,Album album)
+        public static string getAlbumCoverPath(string basePath, Album album, int addYear = 0)
         {
-            string sAlbumDir = getAlbumFolder(basePath, album);
+            string sAlbumDir = getAlbumFolder(basePath, album, addYear);
             string title = Regex.Replace(album.Title.Replace("（", "(").Replace("）", ")"), @"\([^\(]*\)", "");
             string sRet = string.Format("{0}/{1}.jpg", sAlbumDir, formatPath(title));
-            if (sRet.Length >= 260)
-            {
-                int iLen = sRet.Length - 260; 
-                sRet = string.Format("{0}/{1}.jpg", sAlbumDir, formatPath(title).Substring(0, formatPath(title).Length - iLen));
-            }
+
+            sRet = cutFilePath(sRet);
             return Path.GetFullPath(sRet);
         }
             
-        public static string getTrackPath(string basePath, Album album, Track track, string sdlurl, bool hyphen=false, Playlist plist=null, string trackTitle = null, bool artistBeforeTitle = false)
+        public static string getTrackPath(string basePath, Album album, Track track, string sdlurl, 
+                                            bool hyphen=false, Playlist plist=null, string trackTitle = null, 
+                                            bool artistBeforeTitle = false, bool addexplicit=false, int addYear = 0,
+                                            bool useTrackNumber = true)
         {
+            //Get sArtistStr
             string sArtistStr = "";
             if (artistBeforeTitle && track.Artist != null)
             {
                 sArtistStr = formatPath(track.Artist.Name) + " - ";
             }
 
+            //Get Explicit
+            string sExplicitStr = "";
+            if(addexplicit && track.Explicit)
+            {
+                sExplicitStr = "(Explicit)";
+            }
+
+            string sRet = "";
             if (album != null)
             {
-                string sAlbumDir = getAlbumFolder(basePath, album);
+                string sAlbumDir = getAlbumFolder(basePath, album, addYear);
                 string sTrackDir = sAlbumDir;
                 if (album.NumberOfVolumes > 1)
                     sTrackDir += "Volume" + track.VolumeNumber.ToString() + "/";
 
-                string sChar = hyphen ? "- " : "";
-                string sName = string.Format("{0} {1}{2}{3}{4}",
-                    track.TrackNumber.ToString().PadLeft(2, '0'),
-                    sChar,
-                    sArtistStr,
-                    trackTitle == null ? formatPath(track.Title) : formatPath(trackTitle),
-                    getExtension(sdlurl));
 
-                string sRet = sTrackDir + sName;
-                return Path.GetFullPath(sRet);
+                string sChar = hyphen ? "- " : "";
+                string trackNumber = track.TrackNumber.ToString().PadLeft(2, '0');
+
+                string sPrefix = useTrackNumber ? $"{trackNumber} {sChar}" : "";
+                string sTitle = trackTitle == null ? formatPath(track.Title) : formatPath(trackTitle);
+
+                string sName = string.Format("{0}{1}{2}{3}{4}",
+                    sPrefix,
+                    sArtistStr,
+                    sTitle,
+                    sExplicitStr,
+                    getExtension(sdlurl));
+                sRet = sTrackDir + sName;
             }
             else
             {
                 string sPlistDir = getPlaylistFolder(basePath, plist);
                 string sTrackDir = sPlistDir;
+
                 string sChar = hyphen ? "- " : "";
-                string sName = string.Format("{0} {1}{2}{3}{4}",
-                    (plist.Tracks.IndexOf(track) + 1).ToString().PadLeft(2, '0'),
-                    sChar,
+                string trackNumber = (plist.Tracks.IndexOf(track) + 1).ToString().PadLeft(2, '0');
+
+                string sPrefix = useTrackNumber ? $"{trackNumber} {sChar}" : "";
+
+                string sName = string.Format("{0}{1}{2}{3}",
+                    sPrefix,
                     sArtistStr,
                     trackTitle == null ? formatPath(track.Title) : formatPath(trackTitle),
                     getExtension(sdlurl));
-
-                string sRet = sTrackDir + sName;
-                return Path.GetFullPath(sRet);
+                sRet = sTrackDir + sName;
             }
+
+            sRet = cutFilePath(sRet);
+            return Path.GetFullPath(sRet);
         }
 
-        public static string getVideoPath(string basePath, Video video, Album album, string sExt = ".mp4", bool hyphen = false, Playlist plist = null, bool artistBeforeTitle = false)
+        public static string getVideoPath(string basePath, Video video, Album album, string sExt = ".mp4", bool hyphen = false, Playlist plist = null, bool artistBeforeTitle = false, int addYear = 0)
         {
             string sArtistStr = "";
             if(artistBeforeTitle && video.Artist != null)
@@ -783,7 +964,8 @@ namespace Tidal
 
             if (album != null)
             {
-                string sRet = getAlbumFolder(basePath, album) + sArtistStr + formatPath(video.Title) + sExt;
+                string sRet = getAlbumFolder(basePath, album, addYear) + sArtistStr + formatPath(video.Title) + sExt;
+                sRet = cutFilePath(sRet);
                 return Path.GetFullPath(sRet);
 
             }
@@ -797,11 +979,13 @@ namespace Tidal
                     sArtistStr,
                     formatPath(video.Title),
                     sExt);
-                return Path.GetFullPath(sRet + sName);
+                sRet = cutFilePath(sRet + sName);
+                return Path.GetFullPath(sRet);
             }
             else
             { 
                 string sRet = string.Format("{0}/Video/{1}{2}{3}", basePath, sArtistStr, formatPath(video.Title), sExt);
+                sRet = cutFilePath(sRet);
                 return Path.GetFullPath(sRet);
             }
         }
@@ -912,7 +1096,7 @@ namespace Tidal
             if (inType == eObjectType.VIDEO)
                 goto POINT_ERR;
         POINT_ARTIST:
-            oRet = getArtist(sStr, out sErrmsg, true);
+            oRet = getArtist(sStr, out sErrmsg, true, Config.IncludeEP());
             if (oRet != null)
             {
                 eType = eObjectType.ARTIST;
@@ -986,6 +1170,41 @@ namespace Tidal
                     return (eResolution)item.Key;
             }
             return eResolution.e1080P;
+        }
+
+        public static string getFlag(object item)
+        {
+            Type t = item.GetType();
+            if (typeof(Album) == t)
+            {
+                Album obj = (Album)item;
+                if (obj.AudioQuality == "HI_RES")
+                    return "M";
+            }
+            else if (typeof(Track) == t)
+            {
+                Track obj = (Track)item;
+                if (obj.AudioQuality == "HI_RES")
+                    return "M";
+            }
+            return null;
+        }
+
+        public static string cutFilePath(string sFilePath)
+        {
+            if (sFilePath.Length >= 260)
+            {
+                int iLen = sFilePath.Length - 260 + 10; //10 set aside 
+                string sName = Path.GetFileNameWithoutExtension(sFilePath);
+                string sExt = Path.GetExtension(sFilePath);
+                string sPath = sFilePath.Substring(0, sFilePath.Length - sName.Length - sExt.Length);
+                if (sName.Length > iLen)
+                {
+                    string sRet = sPath + sName.Substring(0, sName.Length - iLen) + sExt;
+                    return sRet;
+                }
+            }
+            return sFilePath;
         }
         #endregion
     }

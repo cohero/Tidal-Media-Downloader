@@ -23,9 +23,15 @@ namespace TIDALDL_UI.Pages
         public int    SelectResolutionIndex { get; set; }
         public bool   OnlyM4a { get; set; }
         public bool   AddHyphen { get; set; }
+        public bool   UseTrackNumber { get; set; }
         public bool   ToChinese { get; set; }
         public bool   CheckExist { get; set; }
         public bool   ArtistBeforeTitle { get; set; }
+
+        public bool AddExplicitTag { get; set; }
+        public bool IncludeEPSingle { get; set; }
+        public int  AddYearIndex { get; set; }
+        public bool SaveCovers { get; set; }
 
         public bool CheckCommon { get; set; } = true;
         public bool CheckTrack { get; set; } = false;
@@ -43,16 +49,21 @@ namespace TIDALDL_UI.Pages
         {
             OutputDir             = Config.OutputDir();
             OnlyM4a               = Config.OnlyM4a();
+            AddExplicitTag        = Config.AddExplicitTag();
+            IncludeEPSingle       = Config.IncludeEP();
             AddHyphen             = Config.AddHyphen();
+            SaveCovers            = Config.SaveCovers();
             ToChinese             = Config.ToChinese();
             CheckExist            = Config.CheckExist();
             ArtistBeforeTitle     = Config.ArtistBeforeTitle();
+            AddYearIndex          = Config.AddYear();
             ThreadNum             = AIGS.Common.Convert.ConverStringToInt(Config.ThreadNum()) - 1;
             SearchNum             = AIGS.Common.Convert.ConverStringToInt(Config.SearchNum()) / 10 - 1;
             QualityList           = TidalTool.getQualityList();
             ResolutionList        = TidalTool.getResolutionList();
             SelectQualityIndex    = QualityList.IndexOf(Config.Quality().ToUpper());
             SelectResolutionIndex = ResolutionList.IndexOf(Config.Resolution().ToUpper());
+            UseTrackNumber        = Config.UseTrackNumber();
 
             if (SelectQualityIndex < 0)
                 SelectQualityIndex = 0;
@@ -76,13 +87,18 @@ namespace TIDALDL_UI.Pages
             Config.ThreadNum((ThreadNum + 1).ToString());
             Config.SearchNum(((SearchNum + 1)*10).ToString());
             Config.OnlyM4a(OnlyM4a.ToString());
+            Config.AddExplicitTag(AddExplicitTag.ToString());
+            Config.SaveCovers(SaveCovers.ToString());
+            Config.IncludeEP(IncludeEPSingle.ToString());
             Config.ToChinese(ToChinese.ToString());
             Config.CheckExist(CheckExist.ToString());
             Config.ArtistBeforeTitle(ArtistBeforeTitle.ToString());
             Config.AddHyphen(AddHyphen.ToString());
+            Config.AddYear(AddYearIndex);
             Config.Quality(QualityList[SelectQualityIndex].ToLower());
             Config.Resolution(ResolutionList[SelectResolutionIndex]);
             Config.OutputDir(OutputDir);
+            Config.UseTrackNumber(UseTrackNumber.ToString());
 
             TidalTool.SetSearchMaxNum(int.Parse(Config.SearchNum()));
             ThreadTool.SetThreadNum(ThreadNum + 1);

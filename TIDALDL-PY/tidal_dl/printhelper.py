@@ -6,8 +6,13 @@ def printErr(length, elsestr):
     cmdHelper.myprint("[ERR]".ljust(length), cmdHelper.TextColor.Red, None)
     print(elsestr)
 
-def printWarring(length, elsestr):
-    cmdHelper.myprint("[WARRING]".ljust(length), cmdHelper.TextColor.Red, None)
+
+def printWarning(length, elsestr):
+    cmdHelper.myprint("[WARNING]".ljust(length), cmdHelper.TextColor.Red, None)
+    print(elsestr)
+
+def printInfo(length, elsestr):
+    cmdHelper.myprint("[INFO]".ljust(length), cmdHelper.TextColor.Yellow, None)
     print(elsestr)
 
 def printSUCCESS(length, elsestr):

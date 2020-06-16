@@ -19,15 +19,17 @@ namespace TIDALDL_UI.Pages
         public int    Number { get; set; }
         public string Title { get; set; }
         public string Type { get; set; }
+        public string Flag { get; set; }
         public string Duration { get; set; }
         public string AlbumTitle { get; set; }
         public bool   Check { get; set; }
         public object Data { get; set; }
 
-        public InfoItem(int number, string title, string duration, string albumtitle,object data = null, string type="TRACK")
+        public InfoItem(int number, string title, string duration, string albumtitle,object data = null, string type="TRACK", string flag = "")
         {
             Check      = true;
             Number     = number;
+            Flag       = flag;
             Title      = title;
             Type       = type;
             Duration   = duration;
@@ -45,6 +47,7 @@ namespace TIDALDL_UI.Pages
         public BitmapImage Cover { get; private set; }
         public bool   Result { get; set; }
         public object Data { get; set; }
+        public bool   AllCheck { get; set; }
 
         /// <summary>
         /// Item List
@@ -63,10 +66,20 @@ namespace TIDALDL_UI.Pages
             Result = false;
             RequestClose();
         }
+
+        public void CheckChange()
+        {
+            foreach (var item in ItemList)
+            {
+                item.Check = AllCheck;
+            }
+            return;
+        }
         #endregion
 
         public object Load(object data)
         {
+            AllCheck = true;
             Data = data;
             if (data.GetType() == typeof(Playlist))
             {
@@ -81,7 +94,7 @@ namespace TIDALDL_UI.Pages
                 if (plist.Tracks != null)
                 {
                     foreach (Track item in plist.Tracks)
-                        ItemList.Add(new InfoItem(plist.Tracks.IndexOf(item) + 1, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Album.Title, item));
+                        ItemList.Add(new InfoItem(plist.Tracks.IndexOf(item) + 1, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Album.Title, item, flag:TidalTool.getFlag(item)));
                 }
                 if (plist.Videos != null)
                 {
@@ -101,7 +114,7 @@ namespace TIDALDL_UI.Pages
                 if (artist.Albums != null)
                 {
                     foreach (Album item in artist.Albums)
-                        ItemList.Add(new InfoItem(artist.Albums.IndexOf(item) + 1, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Title, item, "ALBUM"));
+                        ItemList.Add(new InfoItem(artist.Albums.IndexOf(item) + 1, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Title, item, "ALBUM", flag: TidalTool.getFlag(item)));
                 }
             }
             else if (data.GetType() == typeof(Album))
@@ -116,7 +129,7 @@ namespace TIDALDL_UI.Pages
                 if (album.Tracks != null)
                 {
                     foreach (Track item in album.Tracks)
-                        ItemList.Add(new InfoItem(item.TrackNumber, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Album.Title, item));
+                        ItemList.Add(new InfoItem(item.TrackNumber, item.Title, TimeHelper.ConverIntToString(item.Duration), item.Album.Title, item, flag: TidalTool.getFlag(item)));
                 }
                 if (album.Videos != null)
                 {
